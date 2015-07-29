@@ -4,6 +4,7 @@ module Main where
 import Text.ParserCombinators.Parsec hiding (spaces)
 
 import System.Environment
+import System.IO
 
 import Control.Monad
 import Control.Monad.Except
@@ -303,9 +304,31 @@ readExpr input = case parse parseExpr "lisp" input of
   Left err -> throwError $ Parser err
   Right val -> return val
 
--- | Main entry point
+-- | Main entry point and IO related code
+flushStr :: String -> IO ()
+flushStr str = putStr str >> hFlush stdout
+
+readPrompt :: String -> IO String
+readPrompt prompt = flushStr prompt >> getLine
+
+evalString :: String -> IO String
+evalString expr = return $ extractValue $ trapError (liftM show $ readExpr expr >>= eval)
+
+evalAndPrint :: String -> IO ()
+evalAndPrint expr = evalString expr >>= putStrLn
+
+until_ :: Monad m => (a -> Bool) -> m a -> (a -> m ()) -> m ()
+until_ pred prompt action = do
+  result <- prompt
+  unless (pred result) $ action result >> until_ pred prompt action
+
+runRepl :: IO ()
+runRepl = until_ (== "quit") (readPrompt ":) ") evalAndPrint
+
 main :: IO ()
 main = do
   args <- getArgs
-  let evaled = liftM show $ readExpr (head args) >>= eval
-  putStrLn $ extractValue $ trapError evaled
+  case length args of
+    0 -> runRepl
+    1 -> evalAndPrint $ head args
+    otherwise -> putStrLn "Probram takes only 0 or 1 argument"
