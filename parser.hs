@@ -39,6 +39,14 @@ getVar envRef var = do
         (liftIO . readIORef)
         (lookup var env)
 
+setVar :: Env -> String -> LispVal -> IOThrowsError LispVal
+setVar envRef var value = do
+  env <- liftIO $ readIORef envRef
+  maybe (throwError $ UnboundVar "Setting an unbound variable" var)
+        (liftIO . flip writeIORef value)
+        (lookup var env)
+  return value
+
 defineVar :: Env -> String -> LispVal -> IOThrowsError LispVal
 defineVar envRef var value = do
   alreadyDefined <- liftIO $ isBound envRef var
@@ -65,6 +73,12 @@ data LispVal = Atom String
              | String String
              | Bool Bool
              | Char Char
+             | PrimitiveFunc ([LispVal] -> ThrowsError LispVal)
+             | Func { params :: [String],
+                      vararg :: Maybe String,
+                      body :: [LispVal],
+                      closure :: Env
+                    }
 instance Show LispVal where show = showVal
 
 -- | Possible Scheme Errors
@@ -186,6 +200,12 @@ showVal (Decimal contents) = show contents
 showVal (Bool True) = "#t"
 showVal (Bool False) = "#f"
 showVal (List contents) = "(" ++ unwordsList contents ++ ")"
+showVal (PrimitiveFunc name) = "<primitive>"
+showVal (Func {params = args, vararg = varargs, body = body, closure = env}) =
+  "(lambda (" ++ unwords (map show args) ++
+    (case varargs of
+      Nothing -> ""
+      Just arg -> " . " ++ arg) ++ ") <body>)"
 
 -- | Formats Scheme Error
 showError :: LispError -> String
@@ -237,6 +257,10 @@ primitives = [("+", numericBinop (+)),
               ("eq?", eqv),
               ("eqv?", eqv),
               ("equal?", equal)]
+
+primitiveBindings :: IO Env
+primitiveBindings = nullEnv >>= flip bindVars (map makePrimitiveFunc primitives)
+  where makePrimitiveFunc (var, func) = (var, PrimitiveFunc func)
 
 -- | Adaptes a Haskell functions for Scheme
 numericBinop :: (Integer -> Integer -> Integer) -> [LispVal] -> ThrowsError LispVal
@@ -338,14 +362,31 @@ eval env (List [Atom "if", pred, conseq, alt]) = do
       Bool False -> eval env alt
       otherwise -> eval env conseq
 eval env (List [Atom "define", Atom var, form]) = eval env form >>= defineVar env var
-eval env (List (Atom func : args)) = mapM (eval env) args >>= liftThrows . apply func
+eval env (List (Atom "define" : List (Atom var : params) : body)) = makeNormalFunc env params body >>= defineVar env var
+eval env (List (Atom "lambda" : List params : body)) = makeNormalFunc env params body
+eval env (List (function : args)) = do
+  func <- eval env function
+  argVals <- mapM (eval env) args
+  apply func argVals
 eval env badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
+makeFunc varargs env params body = return $ Func (map showVal params) varargs body env
+makeNormalFunc = makeFunc Nothing
+
 -- | Runs a function on LispVal arguments
-apply :: String -> [LispVal] -> ThrowsError LispVal
-apply func args = maybe (throwError $ NotFunction "Unrecognized primitive function args" func)
-                        ($ args)
-                        (lookup func primitives)
+apply :: LispVal -> [LispVal] -> IOThrowsError LispVal
+apply (PrimitiveFunc func) args = liftThrows $ func args
+apply (Func params varargs body closure) args =
+  if num params /= num args && isNothing varargs
+    then throwError $ NumArgs (num params) args
+    else liftIO (bindVars closure $ zip params args) >>= bindVarArgs varargs >>= evalBody
+  where
+    remainingArgs = drop (length params) args
+    num = toInteger . length
+    evalBody env = liftM last $ mapM (eval env) body
+    bindVarArgs arg env = case arg of
+      Just argName -> liftIO $ bindVars env [(argName, List remainingArgs)]
+      Nothing -> return env
 
 -- | Reads a Scheme expression
 readExpr :: String -> ThrowsError LispVal
@@ -372,10 +413,10 @@ until_ pred prompt action = do
   unless (pred result) $ action result >> until_ pred prompt action
 
 runOne :: String -> IO ()
-runOne expr = nullEnv >>= flip evalAndPrint expr
+runOne expr = primitiveBindings >>= flip evalAndPrint expr
 
 runRepl :: IO ()
-runRepl = nullEnv >>= until_ (== "quit") (readPrompt "BG :) ") . evalAndPrint
+runRepl = primitiveBindings >>= until_ (== "quit") (readPrompt "BG :) ") . evalAndPrint
 
 main :: IO ()
 main = do
