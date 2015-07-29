@@ -35,7 +35,7 @@ isBound envRef var = liftM (isJust . lookup var) (readIORef envRef)
 getVar :: Env -> String -> IOThrowsError LispVal
 getVar envRef var = do
   env <- liftIO $ readIORef envRef
-  maybe (throwError $ UnboundVar "Getting an unbound variable" var)
+  maybe (return $ Atom var)
         (liftIO . readIORef)
         (lookup var env)
 
@@ -252,8 +252,11 @@ primitives = [("+", numericBinop (+)),
               ("string<=?", strBoolBinop (<=)),
               ("string>=?", strBoolBinop (>=)),
               ("car", car),
+              ("first", car),
               ("cdr", cdr),
+              ("rest", cdr),
               ("cons", cons),
+              ("prepend", cons),
               ("eq?", eqv),
               ("eqv?", eqv),
               ("equal?", equal)]
@@ -381,12 +384,8 @@ apply (Func params varargs body closure) args =
     then throwError $ NumArgs (num params) args
     else liftIO (bindVars closure $ zip params args) >>= evalBody
   where
-    remainingArgs = drop (length params) args
     num = toInteger . length
     evalBody env = liftM last $ mapM (eval env) body
-    bindVarArgs arg env = case arg of
-      Just argName -> liftIO $ bindVars env [(argName, List remainingArgs)]
-      Nothing -> return env
 
 -- | Reads a Scheme expression
 readExpr :: String -> ThrowsError LispVal
