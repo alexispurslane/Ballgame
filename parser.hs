@@ -202,7 +202,7 @@ showVal (Bool False) = "#f"
 showVal (List contents) = "(" ++ unwordsList contents ++ ")"
 showVal (PrimitiveFunc name) = "<primitive>"
 showVal (Func {params = args, vararg = varargs, body = body, closure = env}) =
-  "(lambda (" ++ unwords (map show args) ++
+  "(lambda (" ++ unwords args ++
     (case varargs of
       Nothing -> ""
       Just arg -> " . " ++ arg) ++ ") <body>)"
@@ -379,7 +379,7 @@ apply (PrimitiveFunc func) args = liftThrows $ func args
 apply (Func params varargs body closure) args =
   if num params /= num args && isNothing varargs
     then throwError $ NumArgs (num params) args
-    else liftIO (bindVars closure $ zip params args) >>= bindVarArgs varargs >>= evalBody
+    else liftIO (bindVars closure $ zip params args) >>= evalBody
   where
     remainingArgs = drop (length params) args
     num = toInteger . length
