@@ -12,6 +12,7 @@ import Control.Monad.Except
 import Data.Char
 import Data.Maybe
 import Data.IORef
+import Data.Either
 
 -- | The Scheme environment
 type Env = IORef [(String, IORef LispVal)]
@@ -205,7 +206,7 @@ showVal (Func {params = args, vararg = varargs, body = body, closure = env}) =
   "(lambda (" ++ unwords args ++
     (case varargs of
       Nothing -> ""
-      Just arg -> " . " ++ arg) ++ ") <body>)"
+      Just arg -> " . " ++ arg) ++ ") " ++ unwords (map showVal body) ++ ")"
 
 -- | Formats Scheme Error
 showError :: LispError -> String
@@ -357,7 +358,7 @@ eval :: Env -> LispVal -> IOThrowsError LispVal
 eval env val@(String _) = return val
 eval env val@(Number _) = return val
 eval env val@(Bool _) = return val
-eval env (Atom id) = getVar env id
+eval env (Atom id) = getVar env id >>= eval env
 eval env (List [Atom "quote", val]) = return val
 eval env (List [Atom "if", pred, conseq, alt]) = do
     result <- eval env pred
@@ -367,19 +368,22 @@ eval env (List [Atom "if", pred, conseq, alt]) = do
 eval env (List [Atom "define", Atom var, form]) = eval env form >>= defineVar env var
 eval env (List (Atom "define" : List (Atom var : params) : body)) = makeNormalFunc env params body >>= defineVar env var
 eval env (List (Atom "lambda" : List params : body)) = makeNormalFunc env params body
+eval env (PrimitiveFunc f) = return $ PrimitiveFunc f
 eval env (List (function : args)) = do
   func <- eval env function
   argVals <- mapM (eval env) args
-  apply func argVals
+  case func of
+    PrimitiveFunc _ -> apply env func argVals
+    Func _ _ _ _ -> apply env func args
 eval env badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 makeFunc varargs env params body = return $ Func (map showVal params) varargs body env
 makeNormalFunc = makeFunc Nothing
 
 -- | Runs a function on LispVal arguments
-apply :: LispVal -> [LispVal] -> IOThrowsError LispVal
-apply (PrimitiveFunc func) args = liftThrows $ func args
-apply (Func params varargs body closure) args =
+apply :: Env -> LispVal -> [LispVal] -> IOThrowsError LispVal
+apply env (PrimitiveFunc func) args = liftThrows $ func args
+apply env (Func params varargs body closure) args =
   if num params /= num args && isNothing varargs
     then throwError $ NumArgs (num params) args
     else liftIO (bindVars closure $ zip params args) >>= evalBody
