@@ -80,6 +80,8 @@ data LispVal = Atom String
                       body :: [LispVal],
                       closure :: Env
                     }
+              | IOFunc ([LispVal] -> IOThrowsError LispVal)
+              | Port Handle
 instance Show LispVal where show = showVal
 
 -- | Possible Scheme Errors
@@ -103,7 +105,7 @@ symbol = oneOf "!#$%&|*+-/:<=>?@^_~"
 
 -- | Skips spaces
 spaces :: Parser ()
-spaces = skipMany1 Text.ParserCombinators.Parsec.space
+spaces = skipMany1 (oneOf " ;,")
 
 -- | Returns a LispVal String read from a String
 parseString :: Parser LispVal
@@ -207,6 +209,8 @@ showVal (Func {params = args, vararg = varargs, body = body, closure = env}) =
     (case varargs of
       Nothing -> ""
       Just arg -> " . " ++ arg) ++ ") " ++ unwords (map showVal body) ++ ")"
+showVal (Port _) = "<port>"
+showVal (IOFunc _)= "<I/O function>"
 
 -- | Formats Scheme Error
 showError :: LispError -> String
@@ -365,7 +369,7 @@ eval env (List [Atom "if", pred, conseq, alt]) = do
     case result of
       Bool False -> eval env alt
       otherwise -> eval env conseq
-eval env (List [Atom "define", Atom var, form]) = eval env form >>= defineVar env var
+eval env (List [Atom "define", Atom var, form]) = defineVar env var form
 eval env (List (Atom "lambda" : List params : body)) = makeNormalFunc env params body
 eval env (PrimitiveFunc f) = return $ PrimitiveFunc f
 eval env (List (function : args)) = do
@@ -374,6 +378,7 @@ eval env (List (function : args)) = do
   case func of
     PrimitiveFunc _ -> apply env func argVals
     Func {} -> apply env func args
+    IOFunc _ -> apply env func argVals
 eval env badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 makeFunc varargs env params body = return $ Func (map showVal params) varargs body env
@@ -389,12 +394,16 @@ apply env (Func params varargs body closure) args =
   where
     num = toInteger . length
     evalBody env = liftM last $ mapM (eval env) body
+apply env (IOFunc func) args = func args
 
 -- | Reads a Scheme expression
-readExpr :: String -> ThrowsError LispVal
-readExpr input = case parse parseExpr "lisp" input of
+readOrThrow :: Parser a -> String -> ThrowsError a
+readOrThrow parser input = case parse parser "Ballgame Scheme" input of
   Left err -> throwError $ Parser err
   Right val -> return val
+
+readExpr = readOrThrow parseExpr
+readExprList = readOrThrow (endBy parseExpr spaces)
 
 -- | Main entry point and IO related code
 flushStr :: String -> IO ()
