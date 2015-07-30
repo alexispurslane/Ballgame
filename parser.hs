@@ -366,7 +366,6 @@ eval env (List [Atom "if", pred, conseq, alt]) = do
       Bool False -> eval env alt
       otherwise -> eval env conseq
 eval env (List [Atom "define", Atom var, form]) = eval env form >>= defineVar env var
-eval env (List (Atom "define" : List (Atom var : params) : body)) = makeNormalFunc env params body >>= defineVar env var
 eval env (List (Atom "lambda" : List params : body)) = makeNormalFunc env params body
 eval env (PrimitiveFunc f) = return $ PrimitiveFunc f
 eval env (List (function : args)) = do
@@ -374,7 +373,7 @@ eval env (List (function : args)) = do
   argVals <- mapM (eval env) args
   case func of
     PrimitiveFunc _ -> apply env func argVals
-    Func _ _ _ _ -> apply env func args
+    Func {} -> apply env func args
 eval env badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 makeFunc varargs env params body = return $ Func (map showVal params) varargs body env
