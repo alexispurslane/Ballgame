@@ -423,11 +423,10 @@ eval env (IOFunc f) = return $ IOFunc f
 eval env (List [Atom "load", String filename]) = load filename >>= liftM last . mapM (eval env)
 eval env (List (function : args)) = do
   func <- eval env function
-  argVals <- mapM (eval env) args
   case func of
-    PrimitiveFunc _ -> apply func argVals
+    PrimitiveFunc _ -> mapM (eval env) args >>= apply func
     Func {} -> apply func args
-    IOFunc _ -> apply func argVals
+    IOFunc _ -> mapM (eval env) args >>= apply func
 eval env badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 makeFunc varargs env params body = return $ Func (map showVal params) varargs body env
