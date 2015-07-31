@@ -105,7 +105,7 @@ symbol = oneOf "!#$%&|*+-/:<=>?@^_~"
 
 -- | Skips spaces
 spaces :: Parser ()
-spaces = skipMany1 (oneOf " ;,")
+spaces = skipMany1 (oneOf " ")
 
 -- | Returns a LispVal String read from a String
 parseString :: Parser LispVal
@@ -156,6 +156,18 @@ parseQuoted = do
   x <- parseExpr
   return $ List [Atom "quote", x]
 
+parseQuasiquoted :: Parser LispVal
+parseQuasiquoted = do
+  char '`'
+  x <- parseExpr
+  return $ List [Atom "quasiquote", x]
+
+parseUnquoted :: Parser LispVal
+parseUnquoted = do
+  char ','
+  x <- parseExpr
+  return $ List [Atom "unquote", x]
+
 -- | Returns a LispVal Atom read from a String
 parseAtom :: Parser LispVal
 parseAtom = do
@@ -180,15 +192,17 @@ parseDecimal = do
   whole <- many1 digit
   char '.'
   decimal <- many1 digit
-  return $ Decimal (read (whole++"."++decimal) :: Double)
+  return $ Decimal (read (whole++"."++decimal))
 
 -- | Parses a Scheme expression
 parseExpr :: Parser LispVal
 parseExpr = parseAtom
   <|> parseString
-  <|> parseNumber
-  <|> parseDecimal
+  <|> try parseDecimal
+  <|> try parseNumber
   <|> parseQuoted
+  <|> parseQuasiquoted
+  <|> parseUnquoted
   <|> do oneOf "({["
          x <- try parseList
          oneOf ")}]"
@@ -331,11 +345,13 @@ equal badArgList = throwError $ NumArgs 2 badArgList
 -- | Primitive list access functions
 car :: [LispVal] -> ThrowsError LispVal
 car [List (x : xs)] = return x
+car [String (x : xs)] = return $ String [x]
 car [badArg] = throwError $ TypeMismatch "pair" badArg
 car badArgList = throwError $ NumArgs 1 badArgList
 
 cdr :: [LispVal] -> ThrowsError LispVal
 cdr [List (x : xs)] = return $ List xs
+cdr [String (x : xs)] = return $ String xs
 cdr [badArg] = throwError $ TypeMismatch "pair" badArg
 cdr badArgList = throwError $ NumArgs 1 badArgList
 
@@ -408,9 +424,11 @@ readAll [String filename] = liftM List $ load filename
 eval :: Env -> LispVal -> IOThrowsError LispVal
 eval env val@(String _) = return val
 eval env val@(Number _) = return val
+eval env val@(Decimal _) = return val
 eval env val@(Bool _) = return val
 eval env (Atom id) = getVar env id >>= eval env
 eval env (List [Atom "quote", val]) = return val
+eval env (List [Atom "quasiquote", val]) = qeval env val
 eval env (List [Atom "if", pred, conseq, alt]) = do
     result <- eval env pred
     case result of
@@ -428,6 +446,11 @@ eval env (List (function : args)) = do
     Func {} -> apply func args
     IOFunc _ -> mapM (eval env) args >>= apply func
 eval env badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
+
+qeval :: Env -> LispVal -> IOThrowsError LispVal
+qeval env (List [Atom "unquote", val]) = eval env val
+qeval env (List val) = liftM List (mapM (qeval env) val)
+qeval env (val) = return val
 
 makeFunc varargs env params body = return $ Func (map showVal params) varargs body env
 makeNormalFunc = makeFunc Nothing
