@@ -5,6 +5,7 @@ import Text.ParserCombinators.Parsec hiding (spaces)
 
 import System.Environment
 import System.IO
+import System.Console.Readline
 
 import Control.Monad
 import Control.Monad.Except
@@ -489,7 +490,12 @@ flushStr :: String -> IO ()
 flushStr str = putStr str >> hFlush stdout
 
 readPrompt :: String -> IO String
-readPrompt prompt = flushStr prompt >> getLine
+readPrompt prompt = do
+  maybeLine <- readline prompt
+  case maybeLine of
+    Nothing   -> return ""
+    Just line -> do addHistory line
+                    return line
 
 evalString :: Env -> String -> IO String
 evalString env expr = runIOThrows $ liftM show $ liftThrows (readExpr expr) >>= eval env
