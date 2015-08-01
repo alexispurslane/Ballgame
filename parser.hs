@@ -69,8 +69,8 @@ bindVars envRef bindings = readIORef envRef >>= extendEnv bindings >>= newIORef
 -- | Possible Scheme values
 data LispVal = Atom String
              | List [LispVal]
+             | DottedList [LispVal] LispVal
              | Number Integer
-             | Decimal Double
              | String String
              | Bool Bool
              | Char Char
@@ -105,7 +105,7 @@ symbol = oneOf "!#$%&|*+-/:<=>?@^_~"
 
 -- | Skips spaces
 spaces :: Parser ()
-spaces = skipMany1 (oneOf " ")
+spaces = skipMany1 (oneOf "\n\r\f\t ")
 
 -- | Returns a LispVal String read from a String
 parseString :: Parser LispVal
@@ -149,6 +149,12 @@ escapedChar = do
 parseList :: Parser LispVal
 parseList = liftM List $ sepBy parseExpr spaces
 
+parseDottedList :: Parser LispVal
+parseDottedList = do
+  head <- endBy parseExpr spaces
+  tail <- char '.' >> spaces >> parseExpr
+  return $ DottedList head tail
+
 -- | Parse a quoted symbol/expression
 parseQuoted :: Parser LispVal
 parseQuoted = do
@@ -186,26 +192,17 @@ parseNumber :: Parser LispVal
 parseNumber = liftM readWrap $ many1 digit
   where readWrap = Number . read
 
--- | Returns a LispVal Decimal read from a String
-parseDecimal :: Parser LispVal
-parseDecimal = do
-  whole <- many1 digit
-  char '.'
-  decimal <- many1 digit
-  return $ Decimal (read (whole++"."++decimal))
-
 -- | Parses a Scheme expression
 parseExpr :: Parser LispVal
 parseExpr = parseAtom
   <|> parseString
-  <|> try parseDecimal
-  <|> try parseNumber
+  <|> parseNumber
   <|> parseQuoted
   <|> parseQuasiquoted
   <|> parseUnquoted
   <|> do oneOf "({["
-         x <- try parseList
-         oneOf ")}]"
+         x <- try parseList <|> parseDottedList
+         oneOf "]})"
          return x
 
 -- | Formats Scheme values
@@ -213,10 +210,10 @@ showVal :: LispVal -> String
 showVal (String contents) = "\"" ++ contents ++ "\""
 showVal (Atom name) = name
 showVal (Number contents) = show contents
-showVal (Decimal contents) = show contents
 showVal (Bool True) = "#t"
 showVal (Bool False) = "#f"
 showVal (List contents) = "(" ++ unwordsList contents ++ ")"
+showVal (DottedList head tail) = "(" ++ unwordsList head ++ " . " ++ showVal tail ++ ")"
 showVal (PrimitiveFunc name) = "<primitive>"
 showVal (Func {params = args, vararg = varargs, body = body, closure = env}) =
   "(lambda (" ++ unwords args ++
@@ -336,6 +333,7 @@ equal [List arg1, List arg2] = return $ Bool $ length arg1 == length arg2 && all
   where equalPair (x1, x2) = case equal [x1, x2] of
                                Left err -> False
                                Right (Bool val) -> val
+equal [DottedList xs x, DottedList ys y] = equal [List $ xs ++ [x], List $ ys ++ [y]]
 equal [arg1, arg2] = do
   primitiveEquals <- liftM or $ mapM (unpackEquals arg1 arg2)
                      [AnyUnpacker unpackNum, AnyUnpacker unpackStr, AnyUnpacker unpackBool]
@@ -346,12 +344,15 @@ equal badArgList = throwError $ NumArgs 2 badArgList
 car :: [LispVal] -> ThrowsError LispVal
 car [List (x : xs)] = return x
 car [String (x : xs)] = return $ String [x]
+car [DottedList (x:xs) _] = return x
 car [badArg] = throwError $ TypeMismatch "pair" badArg
 car badArgList = throwError $ NumArgs 1 badArgList
 
 cdr :: [LispVal] -> ThrowsError LispVal
 cdr [List (x : xs)] = return $ List xs
 cdr [String (x : xs)] = return $ String xs
+cdr [DottedList [x] y] = return x
+cdr [DottedList (_:xs) y] = return $ DottedList xs y
 cdr [badArg] = throwError $ TypeMismatch "pair" badArg
 cdr badArgList = throwError $ NumArgs 1 badArgList
 
@@ -359,6 +360,7 @@ cdr badArgList = throwError $ NumArgs 1 badArgList
 cons :: [LispVal] -> ThrowsError LispVal
 cons [x1, List []] = return $ List [x1]
 cons [x, List xs] = return $ List $ x : xs
+cons [x, DottedList xs last] = return $ DottedList (x:xs) last
 cons [x1, x2] = return $ List $ x1 : [x2]
 cons badArgList = throwError $ NumArgs 2 badArgList
 
@@ -372,6 +374,7 @@ eqv [List arg1, List arg2] = return $ Bool $ length arg1 == length arg2 && all e
   where eqvPair (x1, x2) = case eqv [x1, x2] of
                              Left err -> False
                              Right (Bool val) -> val
+eqv [DottedList xs x, DottedList ys y] = eqv [List $ xs ++ [x], List $ ys ++ [y]]
 eqv [_, _] = return $ Bool False
 eqv badArgList = throwError $ NumArgs 2 badArgList
 
@@ -424,9 +427,8 @@ readAll [String filename] = liftM List $ load filename
 eval :: Env -> LispVal -> IOThrowsError LispVal
 eval env val@(String _) = return val
 eval env val@(Number _) = return val
-eval env val@(Decimal _) = return val
 eval env val@(Bool _) = return val
-eval env (Atom id) = getVar env id >>= eval env
+eval env (Atom id) = getVar env id
 eval env (List [Atom "quote", val]) = return val
 eval env (List [Atom "quasiquote", val]) = qeval env val
 eval env (List [Atom "if", pred, conseq, alt]) = do
@@ -434,17 +436,18 @@ eval env (List [Atom "if", pred, conseq, alt]) = do
     case result of
       Bool False -> eval env alt
       otherwise -> eval env conseq
-eval env (List [Atom "define", Atom var, form]) = defineVar env var form
+eval env (List [Atom "define", Atom var, form]) =  eval env form >>= defineVar env var
+eval env (List (Atom "define" : List (Atom var : params) : body)) = makeNormalFunc env params body >>= defineVar env var
+eval env (List (Atom "define" : DottedList (Atom var : params) varargs : body)) = makeVarargs varargs env params body >>= defineVar env var
 eval env (List (Atom "lambda" : List params : body)) = makeNormalFunc env params body
+eval env (List (Atom "lambda" : DottedList params varargs : body)) = makeVarargs varargs env params body
+eval env (List (Atom "lambda" : varargs@(Atom _) : body)) = makeVarargs varargs env [] body
 eval env (PrimitiveFunc f) = return $ PrimitiveFunc f
 eval env (IOFunc f) = return $ IOFunc f
 eval env (List [Atom "load", String filename]) = load filename >>= liftM last . mapM (eval env)
 eval env (List (function : args)) = do
   func <- eval env function
-  case func of
-    PrimitiveFunc _ -> mapM (eval env) args >>= apply func
-    Func {} -> apply func args
-    IOFunc _ -> mapM (eval env) args >>= apply func
+  mapM (eval env) args >>= apply func
 eval env badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 qeval :: Env -> LispVal -> IOThrowsError LispVal
@@ -454,6 +457,7 @@ qeval env (val) = return val
 
 makeFunc varargs env params body = return $ Func (map showVal params) varargs body env
 makeNormalFunc = makeFunc Nothing
+makeVarargs = makeFunc . Just . showVal
 
 -- | Runs a function on LispVal arguments
 apply :: LispVal -> [LispVal] -> IOThrowsError LispVal
@@ -461,10 +465,14 @@ apply (PrimitiveFunc func) args = liftThrows $ func args
 apply (Func params varargs body closure) args =
   if num params /= num args && isNothing varargs
     then throwError $ NumArgs (num params) args
-    else liftIO (bindVars closure $ zip params args) >>= evalBody
+    else liftIO (bindVars closure $ zip params args) >>= bindVarArgs varargs >>= evalBody
   where
+    remainingArgs = drop (length params) args
     num = toInteger . length
     evalBody env = liftM last $ mapM (eval env) body
+    bindVarArgs arg env = case arg of
+                            Just argName -> liftIO $ bindVars env [(argName, List remainingArgs)]
+                            Nothing -> return env
 apply (IOFunc func) args = func args
 
 -- | Reads a Scheme expression
