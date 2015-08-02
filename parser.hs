@@ -37,7 +37,7 @@ isBound envRef var = liftM (isJust . lookup var) (readIORef envRef)
 getVar :: Env -> String -> IOThrowsError LispVal
 getVar envRef var = do
   env <- liftIO $ readIORef envRef
-  maybe (return $ Atom var)
+  maybe (return $ Atom "undefined")
         (liftIO . readIORef)
         (lookup var env)
 
@@ -84,6 +84,10 @@ data LispVal = Atom String
               | IOFunc ([LispVal] -> IOThrowsError LispVal)
               | Port Handle
 instance Show LispVal where show = showVal
+
+extractAtom :: LispVal -> String
+extractAtom (Atom v) = v
+extractAtom _ = "not atom"
 
 -- | Possible Scheme Errors
 data LispError = NumArgs Integer [LispVal]
@@ -201,9 +205,12 @@ parseExpr = parseAtom
   <|> parseQuoted
   <|> parseQuasiquoted
   <|> parseUnquoted
-  <|> do oneOf "({["
+  <|> do c <- oneOf "({["
          x <- try parseList <|> parseDottedList
-         oneOf "]})"
+         char $ case c of -- Make sure stuff like (} doesn't work.
+           '(' -> ')'
+           '[' -> ']'
+           '{' -> '}'
          return x
 
 -- | Formats Scheme values
@@ -448,7 +455,12 @@ eval env (IOFunc f) = return $ IOFunc f
 eval env (List [Atom "load", String filename]) = load filename >>= liftM last . mapM (eval env)
 eval env (List (function : args)) = do
   func <- eval env function
-  mapM (eval env) args >>= apply func
+  macro <- eval env (Atom ("@" ++ extractAtom function))
+  if extractAtom func /= "undefined"
+  then mapM (eval env) args >>= apply func
+  else if extractAtom macro /= "undefined"
+       then apply macro [List args] >>= eval env
+       else throwError $ TypeMismatch "function" (Atom $ extractAtom function ++ ", which was undefined.")
 eval env badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 qeval :: Env -> LispVal -> IOThrowsError LispVal
@@ -475,6 +487,7 @@ apply (Func params varargs body closure) args =
                             Just argName -> liftIO $ bindVars env [(argName, List remainingArgs)]
                             Nothing -> return env
 apply (IOFunc func) args = func args
+apply (badFunc) _ = throwError $ TypeMismatch "function" badFunc
 
 -- | Reads a Scheme expression
 readOrThrow :: Parser a -> String -> ThrowsError a
