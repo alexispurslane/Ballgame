@@ -62,11 +62,22 @@
 (define (filter pred lst) (foldr (lambda (x y) (if (pred x) (cons x y) y)) '() lst))
 
 
-(define (list-tail lst k)
+(define (drop lst k)
   (if (zero? k)
       lst
-      (list-tail (cdr lst) (- k 1))))
+      (drop (cdr lst) (- k 1))))
 
-(define (list-ref lst k) (car (list-tail lst k)))
+(define (take lst k)
+  (if (= k 0)
+    '()
+    (cons (car lst)
+      (take (cdr lst)
+            (+ 1 k)))))
+
+(define (nth lst k) (car (drop lst k)))
 
 (define (append . lists) (foldr (lambda (x y) (foldr cons y x)) '() lists))
+
+(define (@define-macro form)
+  `(define (,(string->atom (string-append "@" (atom->string (first (first form))))) form)
+      ,(nth form 1)))

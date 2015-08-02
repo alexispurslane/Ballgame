@@ -284,7 +284,9 @@ primitives = [("+", numericBinop (+)),
               ("prepend", cons),
               ("eq?", eqv),
               ("eqv?", eqv),
-              ("equal?", equal)]
+              ("equal?", equal),
+              ("atom->string", atomToString),
+              ("string->atom", stringToAtom)]
 
 primitiveBindings :: IO Env
 primitiveBindings = nullEnv >>= flip bindVars (map (makeFunc IOFunc) ioPrimitives
@@ -371,6 +373,18 @@ cons [x, List xs] = return $ List $ x : xs
 cons [x, DottedList xs last] = return $ DottedList (x:xs) last
 cons [x1, x2] = return $ List $ x1 : [x2]
 cons badArgList = throwError $ NumArgs 2 badArgList
+
+-- | Convert atom to string
+atomToString :: [LispVal] -> ThrowsError LispVal
+atomToString [Atom x] = return $ String x
+atomToString [badArg] = throwError $ TypeMismatch "atom" badArg
+atomToString badArgList = throwError $ NumArgs 1 badArgList
+
+-- | Convert atom to string
+stringToAtom :: [LispVal] -> ThrowsError LispVal
+stringToAtom [String x] = return $ Atom x
+stringToAtom [badArg] = throwError $ TypeMismatch "string" badArg
+stringToAtom badArgList = throwError $ NumArgs 1 badArgList
 
 -- | Checks if two LispVals are exactly equivilant and equal
 eqv :: [LispVal] -> ThrowsError LispVal
