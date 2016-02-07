@@ -4,7 +4,7 @@
 (define (list . objs) objs)
 
 (define (id obj) obj)
-(define (flip func) (lambda (arg1 arg2) (func arg2 arg1)))
+(define (flip func) (lambda (arg . args) (apply func (reverse (cons arg args)))))
 (define (curry func arg1) (lambda (arg) (apply func (cons arg1 (list arg)))))
 (define (compose f g) (lambda (arg) (f (apply g args))))
 
@@ -46,7 +46,7 @@
 
 
 (define (length lst) (fold (lambda (x y) (+ x 1)) 0 lst))
-(define (reverse lst) (fold (flip cons) '() lst))
+(define (reverse lst) (fold (lambda (x y) (cons y x)) '() lst))
 
 
 (define (mem-helper pred op) (lambda (acc next) (if (and (not acc) (pred (op next))) next acc)))
